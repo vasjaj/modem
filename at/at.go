@@ -61,6 +61,8 @@ type AT struct {
 	// time to wait for individual commands to complete
 	cmdTimeout time.Duration
 
+	okLines []string
+
 	// indications mapped by prefix
 	//
 	// Only accessed from the indLoop
@@ -163,6 +165,13 @@ func (o CmdsOption) applyInitOption(i *initConfig) {
 	i.cmds = []string(o)
 }
 
+type OkLinesOption []string
+
+func (o OkLinesOption) applyCommandOption(c *commandConfig) {
+	c.okLines = []string(o)
+}
+
+
 // WithCmds specifies the set of AT commands issued by Init.
 //
 // The default commands are ATZ.
@@ -251,7 +260,7 @@ func (a *AT) Command(cmd string, options ...CommandOption) ([]string, error) {
 	}
 	done := make(chan response)
 	cmdf := func() {
-		info, err := a.processReq(cmd, cfg.timeout)
+		info, err := a.processReq(cmd, cfg.timeout, cfg.okLines)
 		done <- response{info: info, err: err}
 	}
 	select {
@@ -427,7 +436,7 @@ func (a *AT) escape(b ...byte) {
 }
 
 // perform a request  - issuing the command and awaiting the response.
-func (a *AT) processReq(cmd string, timeout time.Duration) (info []string, err error) {
+func (a *AT) processReq(cmd string, timeout time.Duration, okLines []string) (info []string, err error) {
 	a.waitEscGuard()
 	err = a.writeCommand(cmd)
 	if err != nil {
@@ -453,7 +462,7 @@ func (a *AT) processReq(cmd string, timeout time.Duration) (info []string, err e
 			if line == "" {
 				continue
 			}
-			lt := parseRxLine(line, cmdID)
+			lt := parseRxLine(line, cmdID, okLines)
 			i, done, perr := a.processRxLine(lt, line)
 			if i != nil {
 				info = append(info, *i)
@@ -499,7 +508,7 @@ func (a *AT) processSmsReq(cmd string, sms string, timeout time.Duration) (info 
 			if line == "" {
 				continue
 			}
-			lt := parseRxLine(line, cmdID)
+			lt := parseRxLine(line, cmdID, a.okLines)
 			i, done, perr := a.processSmsRxLine(lt, line, sms)
 			if i != nil {
 				info = append(info, *i)
@@ -530,9 +539,6 @@ func (a *AT) processRxLine(lt rxl, line string) (info *string, done bool, err er
 		err = newError(line)
 	case rxlUnknown, rxlInfo:
 		info = &line
-	case rxlConnect:
-		info = &line
-		done = true
 	case rxlConnectError:
 		err = ConnectError(line)
 	}
@@ -762,12 +768,12 @@ func parseCmdID(cmdLine string) string {
 }
 
 // parseRxLine parses a received line and identifies the line type.
-func parseRxLine(line string, cmdID string) rxl {
+func parseRxLine(line string, cmdID string, okLines []string) rxl {
 	switch {
-	case line == "OK" || line == "SEND OK":
+	case line == "OK" || contains(okLines, line) || line == "SEND OK":
 		return rxlStatusOK
-	case strings.HasPrefix(line, "CONNECT"):
-		return rxlConnect
+	// case strings.HasPrefix(line, "CONNECT"):
+	// 	return rxlConnect
 	case strings.HasPrefix(line, "ERROR"),
 		strings.HasPrefix(line, "+CME ERROR:"),
 		strings.HasPrefix(line, "+CMS ERROR:"):
@@ -795,6 +801,16 @@ func parseRxLine(line string, cmdID string) rxl {
 	}
 }
 
+func contains(s []string, str string) bool {
+	for _, v := range s {
+		if v == str {
+			return true
+		}
+	}
+
+	return false
+}
+
 // scanLines is a custom line scanner for lineReader that recognises the prompt
 // returned by the modem in response to SMS commands such as +CMGS.
 func scanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -811,6 +827,7 @@ func scanLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 
 type commandConfig struct {
 	timeout time.Duration
+	okLines []string
 }
 
 type initConfig struct {
