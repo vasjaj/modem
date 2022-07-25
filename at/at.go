@@ -171,7 +171,6 @@ func (o OkLinesOption) applyCommandOption(c *commandConfig) {
 	c.okLines = []string(o)
 }
 
-
 // WithCmds specifies the set of AT commands issued by Init.
 //
 // The default commands are ATZ.
@@ -770,7 +769,7 @@ func parseCmdID(cmdLine string) string {
 // parseRxLine parses a received line and identifies the line type.
 func parseRxLine(line string, cmdID string, okLines []string) rxl {
 	switch {
-	case line == "OK" || contains(okLines, line) || line == "SEND OK":
+	case contains(okLines, line):
 		return rxlStatusOK
 	// case strings.HasPrefix(line, "CONNECT"):
 	// 	return rxlConnect
