@@ -104,6 +104,7 @@ func New(modem io.ReadWriter, options ...Option) *AT {
 		escTime:    20 * time.Millisecond,
 		cmdTimeout: time.Second,
 		inds:       make(map[string]Indication),
+		okLines:    []string{"OK", "SEND OK"},
 	}
 	for _, option := range options {
 		option.applyOption(a)
@@ -168,7 +169,11 @@ func (o CmdsOption) applyInitOption(i *initConfig) {
 type OkLinesOption []string
 
 func (o OkLinesOption) applyCommandOption(c *commandConfig) {
-	c.okLines = []string(o)
+	c.okLines = o
+}
+
+func (o OkLinesOption) applyOption(a *AT) {
+	a.okLines = o
 }
 
 // WithCmds specifies the set of AT commands issued by Init.
@@ -253,7 +258,8 @@ func (a *AT) Closed() <-chan struct{} {
 // the command and the status line), or an error if the command did not
 // complete successfully.
 func (a *AT) Command(cmd string, options ...CommandOption) ([]string, error) {
-	cfg := commandConfig{timeout: a.cmdTimeout}
+	cfg := commandConfig{timeout: a.cmdTimeout, okLines: a.okLines}
+
 	for _, option := range options {
 		option.applyCommandOption(&cfg)
 	}
