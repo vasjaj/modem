@@ -436,7 +436,7 @@ func (a *AT) indLoop(cmds chan func(), in <-chan string, out chan string) {
 // This should only be called from within the cmdLoop.
 func (a *AT) escape(b ...byte) {
 	cmd := append([]byte(string(esc)+"\r\n"), b...)
-	a.modem.Write(cmd)
+	_, _ = a.modem.Write(cmd)
 	a.escGuard = time.NewTimer(a.escTime)
 }
 
@@ -808,7 +808,7 @@ func parseRxLine(line string, cmdID string, okLines []string) rxl {
 
 func contains(s []string, str string) bool {
 	for _, v := range s {
-		if v == str {
+		if strings.HasPrefix(str, v) {
 			return true
 		}
 	}
