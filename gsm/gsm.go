@@ -6,6 +6,7 @@
 package gsm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -71,7 +72,6 @@ func (o encoderOption) applyOption(g *GSM) {
 
 // WithEncoderOption applies the encoder option when converting from text
 // messages to SMS TPDUs.
-//
 func WithEncoderOption(eo sms.EncoderOption) Option {
 	return encoderOption{eo}
 }
@@ -138,13 +138,13 @@ func WithInitCmds(c ...string) RxOption {
 }
 
 // Init initialises the GSM modem.
-func (g *GSM) Init(options ...at.InitOption) (err error) {
-	if err = g.AT.Init(options...); err != nil {
+func (g *GSM) Init(ctx context.Context, options ...at.InitOption) (err error) {
+	if err = g.AT.Init(ctx, options...); err != nil {
 		return
 	}
 	// test GCAP response to ensure +GSM support, and modem sync.
 	var i []string
-	i, err = g.Command("+GCAP")
+	i, err = g.Command(ctx, "+GCAP")
 	if err != nil {
 		return
 	}
@@ -168,7 +168,7 @@ func (g *GSM) Init(options ...at.InitOption) (err error) {
 		cmds[0] = "+CMGF=0" // pdu mode
 	}
 	for _, cmd := range cmds {
-		_, err = g.Command(cmd)
+		_, err = g.Command(ctx, cmd)
 		if err != nil {
 			return
 		}
@@ -182,7 +182,7 @@ func (g *GSM) Init(options ...at.InitOption) (err error) {
 // PDU.
 //
 // The mr is returned on success, else an error.
-func (g *GSM) SendShortMessage(number string, message string, options ...at.CommandOption) (rsp string, err error) {
+func (g *GSM) SendShortMessage(ctx context.Context, number string, message string, options ...at.CommandOption) (rsp string, err error) {
 	if g.pduMode {
 		var pdus []tpdu.TPDU
 		eOpts := append(g.eOpts, sms.To(number))
@@ -199,10 +199,10 @@ func (g *GSM) SendShortMessage(number string, message string, options ...at.Comm
 		if err != nil {
 			return
 		}
-		return g.SendPDU(tp, options...)
+		return g.SendPDU(ctx, tp, options...)
 	}
 	var i []string
-	i, err = g.SMSCommand("+CMGS=\""+number+"\"", message, options...)
+	i, err = g.SMSCommand(ctx, "+CMGS=\""+number+"\"", message, options...)
 	if err != nil {
 		return
 	}
@@ -223,7 +223,7 @@ func (g *GSM) SendShortMessage(number string, message string, options ...at.Comm
 // The message is split into concatenated SMS PDUs, if necessary.
 //
 // The mr of send PDUs is returned on success, else an error.
-func (g *GSM) SendLongMessage(number string, message string, options ...at.CommandOption) (rsp []string, err error) {
+func (g *GSM) SendLongMessage(ctx context.Context, number string, message string, options ...at.CommandOption) (rsp []string, err error) {
 	if !g.pduMode {
 		err = ErrWrongMode
 		return
@@ -241,7 +241,7 @@ func (g *GSM) SendLongMessage(number string, message string, options ...at.Comma
 			return
 		}
 		var mr string
-		mr, err = g.SendPDU(tp, options...)
+		mr, err = g.SendPDU(ctx, tp, options...)
 		if len(mr) > 0 {
 			rsp = append(rsp, mr)
 		}
@@ -256,7 +256,7 @@ func (g *GSM) SendLongMessage(number string, message string, options ...at.Comma
 //
 // tpdu is the binary TPDU to be sent.
 // The mr is returned on success, else an error.
-func (g *GSM) SendPDU(tpdu []byte, options ...at.CommandOption) (rsp string, err error) {
+func (g *GSM) SendPDU(ctx context.Context, tpdu []byte, options ...at.CommandOption) (rsp string, err error) {
 	if !g.pduMode {
 		return "", ErrWrongMode
 	}
@@ -267,7 +267,7 @@ func (g *GSM) SendPDU(tpdu []byte, options ...at.CommandOption) (rsp string, err
 		return
 	}
 	var i []string
-	i, err = g.SMSCommand(fmt.Sprintf("+CMGS=%d", len(tpdu)), s, options...)
+	i, err = g.SMSCommand(ctx, fmt.Sprintf("+CMGS=%d", len(tpdu)), s, options...)
 	if err != nil {
 		return
 	}
@@ -302,7 +302,7 @@ type ErrorHandler func(error)
 
 // Collector is the interface required to collect and reassemble TPDUs.
 //
-// By default this is implemented by an sms.Collector.
+// By default, this is implemented by an sms.Collector.
 type Collector interface {
 	Collect(tpdu.TPDU) ([]*tpdu.TPDU, error)
 }
@@ -323,7 +323,7 @@ type rxConfig struct {
 // Errors detected while receiving messages are passed to the error handler.
 //
 // Requires the modem to be in PDU mode.
-func (g *GSM) StartMessageRx(mh MessageHandler, eh ErrorHandler, options ...RxOption) error {
+func (g *GSM) StartMessageRx(ctx context.Context, mh MessageHandler, eh ErrorHandler, options ...RxOption) error {
 	if !g.pduMode {
 		return ErrWrongMode
 	}
@@ -346,7 +346,7 @@ func (g *GSM) StartMessageRx(mh MessageHandler, eh ErrorHandler, options ...RxOp
 			eh(ErrUnmarshal{info, err})
 			return
 		}
-		g.Command("+CNMA")
+		g.Command(ctx, "+CNMA")
 		tpdus, err := cfg.c.Collect(tp)
 		if err != nil {
 			eh(ErrCollect{tp, err})
@@ -374,7 +374,7 @@ func (g *GSM) StartMessageRx(mh MessageHandler, eh ErrorHandler, options ...RxOp
 	}
 	// tell the modem to forward SMS-DELIVERs via +CMT indications...
 	for _, cmd := range cfg.initCmds {
-		if _, err = g.Command(cmd); err != nil {
+		if _, err = g.Command(ctx, cmd); err != nil {
 			g.CancelIndication("+CMT:")
 			return err
 		}
@@ -383,9 +383,9 @@ func (g *GSM) StartMessageRx(mh MessageHandler, eh ErrorHandler, options ...RxOp
 }
 
 // StopMessageRx ends the reception of messages started by StartMessageRx,
-func (g *GSM) StopMessageRx() {
+func (g *GSM) StopMessageRx(ctx context.Context) {
 	// tell the modem to stop forwarding SMSs to us.
-	g.Command("+CNMI=0,0,0,0,0")
+	g.Command(ctx, "+CNMI=0,0,0,0,0")
 	// and detach the handler
 	g.CancelIndication("+CMT:")
 }

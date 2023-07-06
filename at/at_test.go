@@ -13,6 +13,7 @@
 package at_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vasjaj/modem/at"
 	"github.com/vasjaj/modem/trace"
+)
+
+const (
+	sub = rune(0x1a)
+	esc = rune(0x1b)
 )
 
 func TestNew(t *testing.T) {
@@ -63,9 +69,9 @@ func TestNew(t *testing.T) {
 func TestWithEscTime(t *testing.T) {
 	cmdSet := map[string][]string{
 		// for init
-		string(27) + "\r\n\r\n": {"\r\n"},
-		"ATZ\r\n":               {"OK\r\n"},
-		"ATE0\r\n":              {"OK\r\n"},
+		string(esc) + "\r\n\r\n": {"\r\n"},
+		"ATZ\r\n":                {"OK\r\n"},
+		"ATE0\r\n":               {"OK\r\n"},
 	}
 	patterns := []struct {
 		name    string
@@ -91,7 +97,7 @@ func TestWithEscTime(t *testing.T) {
 			require.NotNil(t, a)
 
 			start := time.Now()
-			err := a.Init()
+			err := a.Init(context.Background())
 			assert.Nil(t, err)
 			end := time.Now()
 			assert.GreaterOrEqual(t, int64(end.Sub(start)), int64(p.d))
@@ -103,10 +109,10 @@ func TestWithEscTime(t *testing.T) {
 func TestWithCmds(t *testing.T) {
 	cmdSet := map[string][]string{
 		// for init
-		string(27) + "\r\n\r\n": {"\r\n"},
-		"ATZ\r\n":               {"OK\r\n"},
-		"ATE0\r\n":              {"OK\r\n"},
-		"AT^CURC=0\r\n":         {"OK\r\n"},
+		string(esc) + "\r\n\r\n": {"\r\n"},
+		"ATZ\r\n":                {"OK\r\n"},
+		"ATE0\r\n":               {"OK\r\n"},
+		"AT^CURC=0\r\n":          {"OK\r\n"},
 	}
 	patterns := []struct {
 		name    string
@@ -132,7 +138,7 @@ func TestWithCmds(t *testing.T) {
 			a := at.New(&mm, p.options...)
 			require.NotNil(t, a)
 
-			err := a.Init()
+			err := a.Init(context.Background())
 			assert.Nil(t, err)
 		}
 		t.Run(p.name, f)
@@ -143,16 +149,16 @@ func TestInit(t *testing.T) {
 	// mocked
 	cmdSet := map[string][]string{
 		// for init
-		string(27) + "\r\n\r\n": {"\r\n"},
-		"ATZ\r\n":               {"OK\r\n"},
-		"ATE0\r\n":              {"OK\r\n"},
-		"AT^CURC=0\r\n":         {"OK\r\n"},
+		string(esc) + "\r\n\r\n": {"\r\n"},
+		"ATZ\r\n":                {"OK\r\n"},
+		"ATE0\r\n":               {"OK\r\n"},
+		"AT^CURC=0\r\n":          {"OK\r\n"},
 	}
 	mm := mockModem{cmdSet: cmdSet, echo: false, r: make(chan []byte, 10)}
 	defer teardownModem(&mm)
 	a := at.New(&mm)
 	require.NotNil(t, a)
-	err := a.Init()
+	err := a.Init(context.Background())
 	require.Nil(t, err)
 	select {
 	case <-a.Closed():
@@ -162,31 +168,31 @@ func TestInit(t *testing.T) {
 
 	// residual OKs
 	mm.r <- []byte("\r\nOK\r\nOK\r\n")
-	err = a.Init()
+	err = a.Init(context.Background())
 	assert.Nil(t, err)
 
 	// residual ERRORs
 	mm.r <- []byte("\r\nERROR\r\nERROR\r\n")
-	err = a.Init()
+	err = a.Init(context.Background())
 	assert.Nil(t, err)
 
 	// customised commands
-	err = a.Init(at.WithCmds("Z", "Z", "^CURC=0"))
+	err = a.Init(context.Background(), at.WithCmds("Z", "Z", "^CURC=0"))
 	assert.Nil(t, err)
 }
 
 func TestInitFailure(t *testing.T) {
 	cmdSet := map[string][]string{
 		// for init
-		string(27) + "\r\n\r\n": {"\r\n"},
-		"ATZ\r\n":               {"ERROR\r\n"},
-		"ATE0\r\n":              {"OK\r\n"},
+		string(esc) + "\r\n\r\n": {"\r\n"},
+		"ATZ\r\n":                {"ERROR\r\n"},
+		"ATE0\r\n":               {"OK\r\n"},
 	}
 	mm := mockModem{cmdSet: cmdSet, echo: false, r: make(chan []byte, 10)}
 	defer teardownModem(&mm)
 	a := at.New(&mm)
 	require.NotNil(t, a)
-	err := a.Init()
+	err := a.Init(context.Background())
 	assert.NotNil(t, err)
 	select {
 	case <-a.Closed():
@@ -195,21 +201,21 @@ func TestInitFailure(t *testing.T) {
 	}
 
 	// lone E0 should work
-	err = a.Init(at.WithCmds("E0"))
+	err = a.Init(context.Background(), at.WithCmds("E0"))
 	assert.Nil(t, err)
 }
 
 func TestCloseInInitTimeout(t *testing.T) {
 	cmdSet := map[string][]string{
 		// for init
-		string(27) + "\r\n\r\n": {"\r\n"},
-		"ATZ\r\n":               {""},
+		string(esc) + "\r\n\r\n": {"\r\n"},
+		"ATZ\r\n":                {""},
 	}
 	mm := mockModem{cmdSet: cmdSet, echo: false, r: make(chan []byte, 10)}
 	defer teardownModem(&mm)
 	a := at.New(&mm)
 	require.NotNil(t, a)
-	err := a.Init(at.WithTimeout(10 * time.Millisecond))
+	err := a.Init(context.Background(), at.WithTimeout(10*time.Millisecond))
 	assert.Equal(t, at.ErrDeadlineExceeded, err)
 }
 
@@ -375,7 +381,7 @@ func TestCommand(t *testing.T) {
 			if p.mutator != nil {
 				p.mutator()
 			}
-			info, err := m.Command(p.cmd, p.options...)
+			info, err := m.Command(context.Background(), p.cmd, p.options...)
 			assert.Equal(t, p.err, err)
 			assert.Equal(t, p.info, info)
 		}
@@ -401,12 +407,12 @@ func TestCommandClosedOnWrite(t *testing.T) {
 	m, mm := setupModem(t, nil)
 	defer teardownModem(mm)
 	mm.closeOnWrite = true
-	info, err := m.Command("PASS")
+	info, err := m.Command(context.Background(), "PASS")
 	assert.Equal(t, at.ErrClosed, err)
 	assert.Nil(t, info)
 
 	// closed before request
-	info, err = m.Command("PASS")
+	info, err = m.Command(context.Background(), "PASS")
 	assert.Equal(t, at.ErrClosed, err)
 	assert.Nil(t, info)
 }
@@ -417,19 +423,19 @@ func TestCommandClosedPreWrite(t *testing.T) {
 	defer teardownModem(mm)
 	mm.Close()
 	// closed before request
-	info, err := m.Command("PASS")
+	info, err := m.Command(context.Background(), "PASS")
 	assert.Equal(t, at.ErrClosed, err)
 	assert.Nil(t, info)
 }
 
 func TestSMSCommand(t *testing.T) {
 	cmdSet := map[string][]string{
-		"ATCMS\r":           {"\r\n+CMS ERROR: 204\r\n"},
-		"ATCME\r":           {"\r\n+CME ERROR: 42\r\n"},
-		"ATSMS\r":           {"\n>"},
-		"ATSMS2\r":          {"\n> "},
-		"info" + string(26): {"\r\n", "info1\r\n", "info2\r\n", "INFO: info3\r\n", "\r\n", "OK\r\n"},
-		"sms+" + string(26): {"\r\n", "info4\r\n", "info5\r\n", "INFO: info6\r\n", "\r\n", "OK\r\n"},
+		"ATCMS\r":            {"\r\n+CMS ERROR: 204\r\n"},
+		"ATCME\r":            {"\r\n+CME ERROR: 42\r\n"},
+		"ATSMS\r":            {"\n>"},
+		"ATSMS2\r":           {"\n> "},
+		"info" + string(sub): {"\r\n", "info1\r\n", "info2\r\n", "INFO: info3\r\n", "\r\n", "OK\r\n"},
+		"sms+" + string(sub): {"\r\n", "info4\r\n", "info5\r\n", "INFO: info6\r\n", "\r\n", "OK\r\n"},
 	}
 	m, mm := setupModem(t, cmdSet)
 	defer teardownModem(mm)
@@ -552,7 +558,7 @@ func TestSMSCommand(t *testing.T) {
 			if p.mutator != nil {
 				p.mutator()
 			}
-			info, err := m.SMSCommand(p.cmd1, p.cmd2, p.options...)
+			info, err := m.SMSCommand(context.Background(), p.cmd1, p.cmd2, p.options...)
 			assert.Equal(t, p.err, err)
 			assert.Equal(t, p.info, info)
 		}
@@ -572,12 +578,12 @@ func TestSMSCommandClosedPrePDU(t *testing.T) {
 	done := make(chan struct{})
 	// Need to queue multiple commands to check queued commands code path.
 	go func() {
-		info, err := m.SMSCommand("SMS", "closed")
+		info, err := m.SMSCommand(context.Background(), "SMS", "closed")
 		assert.NotNil(t, err)
 		assert.Nil(t, info)
 		close(done)
 	}()
-	info, err := m.SMSCommand("SMS", "closed")
+	info, err := m.SMSCommand(context.Background(), "SMS", "closed")
 	assert.NotNil(t, err)
 	assert.Nil(t, info)
 	<-done
