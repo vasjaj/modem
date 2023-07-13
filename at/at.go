@@ -7,6 +7,7 @@ package at
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -75,6 +76,8 @@ type AT struct {
 	escGuard *time.Timer
 }
 
+const EscTimeout = 20 * time.Millisecond
+
 // Option is a construction option for an AT.
 type Option interface {
 	applyOption(*AT)
@@ -99,7 +102,7 @@ func New(modem io.ReadWriter, options ...Option) *AT {
 		iLines:     make(chan string),
 		cLines:     make(chan string),
 		closed:     make(chan struct{}),
-		escTime:    20 * time.Millisecond,
+		escTime:    EscTimeout,
 		cmdTimeout: time.Second,
 		inds:       make(map[string]Indication),
 	}
@@ -119,8 +122,8 @@ func New(modem io.ReadWriter, options ...Option) *AT {
 }
 
 const (
-	sub = 0x1a
-	esc = 0x1b
+	sub = rune(0x1a)
+	esc = rune(0x1b)
 )
 
 // WithEscTime sets the guard time for the modem.
@@ -261,7 +264,7 @@ func (a *AT) Closed() <-chan struct{} {
 // The return value includes the info (the lines returned by the modem between
 // the command and the status line), or an error if the command did not
 // complete successfully.
-func (a *AT) Command(cmd string, options ...CommandOption) ([]string, error) {
+func (a *AT) Command(ctx context.Context, cmd string, options ...CommandOption) ([]string, error) {
 	cfg := commandConfig{timeout: a.cmdTimeout, noModifyCmd: false}
 
 	for _, option := range options {
@@ -269,7 +272,7 @@ func (a *AT) Command(cmd string, options ...CommandOption) ([]string, error) {
 	}
 	done := make(chan response)
 	cmdf := func() {
-		info, err := a.processReq(cmd, cfg.timeout, cfg.noModifyCmd, cfg.parseRxLineFunc)
+		info, err := a.processReq(ctx, cmd, cfg.timeout, cfg.noModifyCmd, cfg.parseRxLineFunc)
 		done <- response{info: info, err: err}
 	}
 	select {
@@ -309,7 +312,7 @@ func (a *AT) Escape(b ...byte) {
 // also be used subsequently to return the modem to a known state.
 //
 // The default init commands can be overridden by the options parameter.
-func (a *AT) Init(options ...InitOption) error {
+func (a *AT) Init(ctx context.Context, options ...InitOption) error {
 	// escape any outstanding SMS operations then CR to flush the command
 	// buffer
 	a.Escape([]byte("\r\n")...)
@@ -319,7 +322,7 @@ func (a *AT) Init(options ...InitOption) error {
 		option.applyInitOption(&cfg)
 	}
 	for _, cmd := range cfg.cmds {
-		_, err := a.Command(cmd, cfg.cmdOpts...)
+		_, err := a.Command(ctx, cmd, cfg.cmdOpts...)
 		switch err {
 		case nil:
 		case ErrDeadlineExceeded:
@@ -335,26 +338,26 @@ func (a *AT) Init(options ...InitOption) error {
 //
 // An SMS command is issued in two steps; first the command line:
 //
-//   AT<command><CR>
+//	AT<command><CR>
 //
 // which the modem responds to with a ">" prompt, after which the SMS PDU is
 // sent to the modem:
 //
-//   <sms><Ctrl-Z>
+//	<sms><Ctrl-Z>
 //
 // The modem then completes the command as per other commands, such as those
 // issued by Command.
 //
 // The format of the sms may be a text message or a hex coded SMS PDU,
 // depending on the configuration of the modem (text or PDU mode).
-func (a *AT) SMSCommand(cmd string, sms string, options ...CommandOption) (info []string, err error) {
+func (a *AT) SMSCommand(ctx context.Context, cmd string, sms string, options ...CommandOption) (info []string, err error) {
 	cfg := commandConfig{timeout: a.cmdTimeout}
 	for _, option := range options {
 		option.applyCommandOption(&cfg)
 	}
 	done := make(chan response)
 	cmdf := func() {
-		info, err := a.processSmsReq(cmd, sms, cfg.timeout, cfg.parseRxLineFunc)
+		info, err := a.processSmsReq(ctx, cmd, sms, cfg.timeout, cfg.parseRxLineFunc)
 		done <- response{info: info, err: err}
 	}
 	select {
@@ -447,7 +450,7 @@ func (a *AT) escape(b ...byte) {
 }
 
 // perform a request — issuing the command and awaiting the response.
-func (a *AT) processReq(cmd string, timeout time.Duration, noModify bool,
+func (a *AT) processReq(ctx context.Context, cmd string, timeout time.Duration, noModify bool,
 	parseRxLine ParseRxLineFunc) (info []string, err error) {
 	a.waitEscGuard()
 
@@ -473,6 +476,11 @@ func (a *AT) processReq(cmd string, timeout time.Duration, noModify bool,
 		case <-expChan:
 			err = ErrDeadlineExceeded
 			return
+
+		case <-ctx.Done():
+			err = ctx.Err()
+			return
+
 		case line, ok := <-a.cLines:
 			if !ok {
 				return nil, ErrClosed
@@ -500,7 +508,7 @@ func (a *AT) processReq(cmd string, timeout time.Duration, noModify bool,
 
 // perform a SMS request  - issuing the command, awaiting the prompt, sending
 // the data and awaiting the response.
-func (a *AT) processSmsReq(cmd string, sms string, timeout time.Duration,
+func (a *AT) processSmsReq(ctx context.Context, cmd string, sms string, timeout time.Duration,
 	parseRxLine ParseRxLineFunc) (info []string, err error) {
 	a.waitEscGuard()
 	err = a.writeSMSCommand(cmd)
@@ -521,6 +529,11 @@ func (a *AT) processSmsReq(cmd string, sms string, timeout time.Duration,
 			a.escape()
 			err = ErrDeadlineExceeded
 			return
+
+		case <-ctx.Done():
+			err = ctx.Err()
+			return
+
 		case line, ok := <-a.cLines:
 			if !ok {
 				err = ErrClosed
@@ -551,9 +564,9 @@ func (a *AT) processSmsReq(cmd string, sms string, timeout time.Duration,
 // adds to the response for the current command.
 //
 // The return values are:
-//  - a line of info to be added to the response (optional)
-//  - a flag indicating if the command is complete.
-//  - an error detected while processing the command.
+//   - a line of info to be added to the response (optional)
+//   - a flag indicating if the command is complete.
+//   - an error detected while processing the command.
 func (a *AT) processRxLine(lt Rxl, line string) (info *string, done bool, err error) {
 	switch lt {
 	case RxlStatusOK:
@@ -578,13 +591,13 @@ func (a *AT) processRxLine(lt Rxl, line string) (info *string, done bool, err er
 // adds to the response for the current command.
 //
 // The return values are:
-//  - a line of info to be added to the response (optional)
-//  - a flag indicating if the command is complete.
-//  - an error detected while processing the command.
+//   - a line of info to be added to the response (optional)
+//   - a flag indicating if the command is complete.
+//   - an error detected while processing the command.
 func (a *AT) processSmsRxLine(lt Rxl, line string, sms string) (info *string, done bool, err error) {
 	switch lt {
 	case RxlUnknown:
-		if line[len(line)-1] == sub && strings.HasPrefix(line, sms) {
+		if line[len(line)-1] == byte(sub) && strings.HasPrefix(line, sms) {
 			// swallow echoed SMS PDU
 			return
 		}
