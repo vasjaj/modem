@@ -670,6 +670,14 @@ func (a *AT) writeRaw(data string) error {
 	return err
 }
 
+// writeRaw writes a raw string to the modem.
+//
+// This should only be called from within the cmdLoop.
+func (a *AT) writeRaw(data string) error {
+	_, err := a.modem.Write([]byte(data))
+	return err
+}
+
 // CMEError indicates a CME Error was returned by the modem.
 //
 // The value is the error value, in string form, which may be the numeric or
